@@ -1,12 +1,18 @@
 # Matched controls for physics-informed input channels in capsule endoscopy
 
-Code and per-seed predictions accompanying *"Matched Controls and Equivalence
-Testing for Physics-Informed Input Channels in Wireless Capsule Endoscopy"*
-(submitted, IEEE Transactions on Medical Imaging, 2026).
+Code and per-seed predictions accompanying two companion manuscripts:
 
-This repository contains everything needed to check the paper's numbers without
-retraining anything: the analytic prior, the five content-free control priors,
-the equivalence-testing code, the aggregation scripts, and the **per-frame test
+- *"Matched Controls and Equivalence Testing for Physics-Informed Input
+  Channels in Wireless Capsule Endoscopy"* (submitted, IEEE Transactions on
+  Medical Imaging, 2026) — the empirical case study.
+- *"What Does a Deterministic Representation Contribute? Matched Controls,
+  Positive Controls, and the Regime Dependence of Physics-Informed Inputs"*
+  (submitted, Medical Image Analysis, 2026) — the methodological framework.
+
+This repository contains everything needed to check the papers' numbers without
+retraining anything: the analytic prior, the six matched control priors, the
+equivalence-testing code, the aggregation scripts, the positive-control
+simulation, the influence-ratio calibration, and the **per-frame test
 predictions from all 616 training runs**.
 
 ## Why this exists
@@ -26,8 +32,8 @@ This repository implements both checks.
 code/
   physics_prior.py       the analytic hemoglobin prior: P_blood and the radial
                          fluence map Phi, both computed in closed form from RGB
-  control_priors.py      the five matched controls -- zeros, shuffled,
-                         random_fixed, gauss, phi_dup -- each matched to the
+  control_priors.py      the six matched controls -- zeros, shuffled,
+                         random_fixed, gauss, phi_dup, cross_image -- each matched to the
                          prior in tensor shape and scale but carrying no
                          optical content
   datasets_pi.py         the transform that emits the 5-channel tensor
@@ -92,3 +98,41 @@ Citation details will be added on acceptance.
 ## Licence
 
 MIT for the code. The prediction files are released under CC BY 4.0.
+
+
+## Added for the methodological companion (MedIA)
+
+```
+code/
+  positive_control.py       Beer-Lambert simulation establishing that the
+                            apparatus detects a real effect where one exists
+                            (+0.248 AUC at N=150, +0.0006 at N=4000)
+  calibrate_influence.py    tests whether the label-free influence ratio R
+                            predicts label-based attribution. It does not
+                            (Spearman rho = 0.02); the negative result and its
+                            mechanism are reported in the paper
+  aggregate_regime.py       the data-fraction x capacity sweep on real images,
+                            with the floor/ceiling validity gate and the
+                            comparability check against the published matrix
+  make_phase_figure.py      the two-panel phase diagram, simulation vs real
+  aggregate_attribution.py  the control hierarchy, in-domain and external
+  aggregate_partitions.py   variance decomposition across ten patient-disjoint
+                            partitions (sigma_seed vs sigma_partition)
+  influence_ratio.py        the label-free diagnostic and its permutation null
+
+results/
+  positive_control_results.json   per-seed AUCs for every simulation cell
+  pc_probs.npz, pc_results.json   per-sample predictions behind the calibration
+  calibration_results.json        R vs Delta_attr for all 48 cells
+  regime_results_n5.json          the real-image sweep at 5 seeds per cell
+  canonical_reference.json        per-arm mean/sd/se over the canonical 44-seed
+                                  matrix, used to gate comparability
+
+preregistration/
+  the Clements third-cohort analysis plan, committed before any model was
+  evaluated on that cohort, and the results recording no deviations from it
+```
+
+Note that `calibrate_influence.py` reports a **negative** result about one of
+our own proposed methods. It is included deliberately: a statistic whose scale
+is confounded is dangerous only while the confound is undocumented.

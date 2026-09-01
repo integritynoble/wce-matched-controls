@@ -46,6 +46,11 @@ def parse_args():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument("--pretrained", action="store_true")
+    parser.add_argument("--train_fraction", type=float, default=1.0,
+                        help="Class-stratified fraction of the training split to use "
+                             "(data-regime axis). The subset depends on (train_fraction, "
+                             "seed) only, never on the arm, so all arms at a given cell "
+                             "see identical frames.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output_dir", type=str, required=True)
@@ -54,11 +59,16 @@ def parse_args():
                         help="Use 5-channel RGB+physics input. Default: off (RGB baseline).")
     parser.add_argument("--control_prior", type=str, default="none",
                         choices=["none", "zeros", "shuffled", "random_fixed",
-                                 "phi_dup", "gauss"],
+                                 "phi_dup", "gauss", "cross_image"],
                         help="Replace the two analytic channels with a matched "
                              "control of the same shape. 'none' is the published "
                              "prior. See control_priors.py for what each control "
-                             "isolates. Requires --use_physics_prior.")
+                             "isolates. Requires --use_physics_prior. "
+                             "'cross_image' supplies a real prior belonging to a "
+                             "different frame, so it retains the shared radial "
+                             "geometry and realistic marginals while destroying "
+                             "image-specific optical content; it needs the donor "
+                             "bank built by control_priors.py --build-donors.")
     parser.add_argument("--physics_alpha", type=float, default=4.0,
                         help="Sharpness of the hemoglobin sigmoid in the physics prior.")
     parser.add_argument("--physics_lambda_eff", type=float, default=None,
@@ -312,6 +322,41 @@ def main():
     train_ds = FolderDatasetWithPaths(os.path.join(args.data_dir, "train"), transform=tf_train,
                                        allow_empty=True)
     class_names = train_ds.classes
+
+    if args.train_fraction < 1.0:
+        # Class-stratified subsample for the data-regime axis.
+        #
+        # The RNG is seeded from (train_fraction, seed) and DELIBERATELY NOT from
+        # the arm: every arm at a given (fraction, seed) must train on the exact
+        # same frames, or the prior-vs-control contrast is confounded by which
+        # images each arm happened to receive. That confound would be invisible
+        # in the output and would grow as the fraction shrinks -- precisely the
+        # regime this axis exists to measure.
+        import collections
+        import numpy as _np  # module-level numpy is not imported in this file
+        by_class = collections.defaultdict(list)
+        for idx, (_, label) in enumerate(train_ds.samples):
+            by_class[label].append(idx)
+        # Explicit arithmetic seed rather than hash(): PYTHONHASHSEED randomises
+        # str/bytes hashing per process, and depending on hash() here would make
+        # the "same frames across arms" guarantee quietly untrue between jobs.
+        frac_key = int(round(args.train_fraction * 1_000_000))
+        rng = _np.random.RandomState((frac_key * 7919 + args.seed * 104729) % (2**31 - 1))
+        keep = []
+        for label in sorted(by_class):
+            pool = sorted(by_class[label])
+            # Keep at least one frame per class: an empty class would change the
+            # number of trainable outputs and make the run incomparable.
+            n_keep = max(1, int(round(len(pool) * args.train_fraction)))
+            keep.extend(rng.choice(pool, size=n_keep, replace=False).tolist())
+        keep.sort()
+        n_before = len(train_ds.samples)
+        train_ds.samples = [train_ds.samples[i] for i in keep]
+        train_ds.imgs = train_ds.samples
+        train_ds.targets = [label for _, label in train_ds.samples]
+        print(f"[train_stage2_pi] train_fraction={args.train_fraction}: "
+              f"{n_before} -> {len(train_ds.samples)} frames, stratified over "
+              f"{len(by_class)} classes")
     # Align val/test class_to_idx to train's by ensuring every class folder
     # exists in val and test (empty folders are required so ImageFolder
     # produces the same alphabetical class_to_idx mapping across all splits).
